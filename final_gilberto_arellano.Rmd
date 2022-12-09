@@ -1,0 +1,344 @@
+---
+title: "Final Project"
+author: "Gilberto Arellano, ID: 1801074"
+subtitle: MGSC 310 Final Project
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+---
+
+```{r setup, include=FALSE}
+
+# Please leave this code chunk as is. It makes some slight formatting changes to alter the output to be more aesthetically pleasing. 
+
+library(knitr)
+
+# Change the number in set seed to your own favorite number
+set.seed(1818)
+options(width=70)
+options(scipen=99)
+
+
+# this sets text outputted in code chunks to small
+opts_chunk$set(tidy.opts=list(width.wrap=50),tidy=TRUE, size = "vsmall")  
+opts_chunk$set(message = FALSE,                                          
+               warning = FALSE,
+               # "caching" stores objects in code chunks and only rewrites if you change things
+               cache = FALSE,                               
+               # automatically downloads dependency files
+               autodep = TRUE,
+               # 
+               cache.comments = FALSE,
+               # 
+               collapse = TRUE,
+               # change fig.width and fig.height to change the code height and width by default
+               fig.width = 5.5,  
+               fig.height = 4.5,
+               fig.align='center')
+
+
+```
+
+```{r setup-2}
+
+# Always print this out before your assignment
+sessionInfo()
+getwd()
+
+```
+
+
+<!-- ### start answering your problem set here -->
+<!-- You may export your homework in either html or pdf, with the former usually being easier. 
+     To export or compile your Rmd file: click above on 'Knit' then 'Knit to HTML' -->
+<!-- Be sure to submit both your .Rmd file and the compiled .html or .pdf file for full credit -->
+
+
+```{r setup-3, include=FALSE}
+
+# load all your libraries in this chunk 
+library('tidyverse')
+library('readr')
+library('dplyr')
+library('forcats')
+library('rsample')
+library('glmnet')
+library('glmnetUtils')
+library('plotROC')
+library('fastDummies')
+library('sjPlot')
+library('gt')
+library('gtExtras')
+library('caret')
+library('yardstick')
+
+```
+
+
+## Importing Data
+
+```{r}
+# Import the Spotify Data
+spotify <- read_csv("spotify_data.csv")
+
+spotify_clean <- spotify %>%
+  mutate(
+    isPopular = if_else(popularity >= 50, 1, 0),
+  )
+
+spotify_split <- initial_split(spotify_clean, prop = 0.75)
+spotify_train <- training(spotify_split)
+spotify_test <- training(spotify_split)
+```
+
+## Ridge Model
+
+```{r}
+# Create ridge model to find the popularity
+ridge_fit<- cv.glmnet(isPopular ~ danceability + energy + instrumentalness
+                       + liveness + loudness + speechiness + tempo + valence + duration_ms,
+                       data = spotify_train,
+                       # note alpha = 0 sets ridge!  
+                       alpha = 0,
+                       na.action = na.exclude)
+
+best_lambda_ridge <- ridge_fit$lambda.min
+best_lambda_ridge
+```
+
+
+### Model Coefficients
+```{r}
+coef(ridge_fit, s = ridge_fit$lambda.1se) %>% 
+  round(3)
+```
+
+  The plot indicates the MSE from the cross-validation results as the lambda increases. The first dotted line is the optimal lambda, lambda.min, for the minimal amount of MSE errors, and the second dotted line is the lambda.min plus one standard error, lambda.1se. The use of lambda.1se is for parsimony, which means we are favoring a model with fewer variables despite the slight difference in MSE errors. <br>
+  As the lambda increases, we penalize the coefficients which can lead to an under fit model. When lambda is approaching zero, we are allowing for an over fit model. 
+  
+
+```{r}
+plot(ridge_fit)
+```
+
+### Model ROC/AUC Values
+
+```{r}
+scores_train_ridge <- predict(ridge_fit, newdata = spotify_train, lambda = best_ridge_lambda, type = "response")
+scores_test_ridge <- predict(ridge_fit, newdata = spotify_test, lambda = best_ridge_lambda)
+
+results_train_ridge <- tibble(spotify_train, 'prob_event' = scores_train_ridge)
+results_test_ridge <- tibble(spotify_test, 'prob_event' = scores_test_ridge)
+
+roc_plot_train_ridge <- ggplot(results_train_ridge, 
+            aes(m = prob_event, d = isPopular)) + 
+  geom_roc(labelsize = 3.5, 
+           cutoffs.at = 
+             c(0.9,0.8,0.7,0.5,0.3,0.2,0.1,0)) +
+  theme_minimal(base_size = 16)
+
+roc_plot_test_ridge <- ggplot(results_test_ridge, 
+            aes(m = prob_event, d = isPopular)) + 
+  geom_roc(labelsize = 3.5, 
+           cutoffs.at = 
+             c(0.9,0.8,0.7,0.5,0.3,0.2,0.1,0)) +
+  theme_minimal(base_size = 16)
+
+#xtab <- table(scores_test_ridge, y_test)
+
+print(roc_plot_train_ridge)
+```
+
+## Ridge Model with different threshold for isPopular
+
+```{r}
+incrementalTreshold <- c(50, 55, 65, 70, 75, 80)
+ridge_metric_table <- data.frame(matrix(ncol = 4))
+colnames(ridge_metric_table) <- c('isPopular','ROC_AUC', 'λ', 'R_Squared')
+
+eval_results <- function(true, predicted, df) {
+  SSE <- sum((predicted - true)^2)
+  SST <- sum((true - mean(true))^2)
+  
+  R_square <- 1 - SSE/ SST
+  R_square <- format(round(R_square, 3), nsmall = 3)
+  
+  data.frame(
+    Rsquare = R_square
+  )
+}
+
+for (x in incrementalTreshold) {
+  
+  # Mutate isPopular variable with a new threshold, x
+  spotify_clean_1 <- spotify %>%
+  mutate(
+    isPopular = if_else(popularity >= x, 1, 0),
+  )
+
+  spotify_split_1 <- initial_split(spotify_clean_1, prop = 0.75)
+  spotify_train_1 <- training(spotify_split_1)
+  spotify_test_1 <- training(spotify_split_1)
+  
+  y_train <- spotify_train_1$isPopular
+  y_test <- spotify_test_1$isPopular
+  
+  ridge_fit_1 <- cv.glmnet(isPopular ~ danceability + energy + instrumentalness
+                       + liveness + loudness + speechiness + tempo + valence + duration_ms,
+                       data = spotify_train_1,
+                       # note alpha = 0 sets ridge!  
+                       alpha = 0,
+                       na.action = na.exclude)
+
+  best_lambda_ridge_1 <- format(round(log(ridge_fit_1$lambda.min), 3), nsmall = 3)
+  
+  # Calculate training and testing scores
+  scores_train_ridge_1 <- predict(ridge_fit_1, newdata = spotify_train_1, lambda = best_ridge_lambda_1)
+  scores_test_ridge_1 <- predict(ridge_fit_1, newdata = spotify_test_1, lambda = best_ridge_lambda_1)
+  results_train_ridge_1 <- tibble(spotify_train_1, 'prob_event' = scores_train_ridge_1)
+  results_test_ridge_1 <- tibble(spotify_test_1, 'prob_event' = scores_test_ridge_1)
+  
+  # Calculate and store ROC/AUC value
+  roc_plot_test_ridge_1 <- ggplot(results_test_ridge_1, aes(m = prob_event, d = isPopular)) + 
+    geom_roc(labelsize = 3.5, cutoffs.at = c(0.9,0.8,0.7,0.5,0.3,0.2,0.1,0))
+  
+  current_auc <- format(round(((calc_auc(roc_plot_test_ridge_1))$AUC), 3), nsmall = 3)
+  
+  results <- eval_results(y_train, scores_train_ridge_1, spotify_train_1)
+  
+  ridge_metric_table <- rbind(ridge_metric_table, c(x, current_auc, best_lambda_ridge_1, results$Rsquare))
+}
+
+library('yardstick')
+conf_mat(results_train_ridge)
+```
+
+
+## Display Metric Table for Ridge
+```{r}
+ridge_metric_table <- as_tibble(ridge_metric_table)
+ridge_metric_table <-
+  ridge_metric_table %>%
+  slice(2:6)
+
+head(ridge_metric_table) %>%
+  gt() %>%
+  gt_theme_nytimes() %>%
+  tab_header(
+    title = ("Error Metric Measurements for Ridge Model"),
+    subtitle = ("Deciding which isPopular threshold is most accurate")
+  )
+```
+
+
+## Lasso Fit Model
+
+```{r}
+lasso_fit <- cv.glmnet(isPopular ~ danceability + energy + instrumentalness
+                       + liveness + loudness + speechiness + tempo + valence + duration_ms,
+                       data = spotify_train,
+                       # note alpha = 0 sets ridge!  
+                       alpha = 1)
+best_lasso_lambda = lasso_fit$lambda.min
+```
+
+
+```{r}
+# coefficients of the lasso model and how relevant they are to predict popularity
+coef(lasso_fit, s = lasso_fit$lambda.min) %>% 
+  round(3)
+```
+
+
+1g) <br>
+  The plot below shows the MSE of a lasso fit model in which the numbers on top of graph indicate how many variables are removed by turning their coefficient's into 0. This can also be shown as '.' as shown in the table above. As we can see, the less variables we remove (approaching 0 lambda) there is an increase of MSE which leads to an over fit model.
+
+```{r}
+plot(lasso_fit)
+```
+
+
+## Lasso ROC/AUC Value
+```{r}
+# 
+scores_train_lasso <- predict(lasso_fit, newdata = spotify_train, lambda = best_lasso_lambda, type = "response")
+scores_test_lasso <- predict(lasso_fit, newdata = spotify_test, lambda = best_lasso_lambda)
+
+results_train_lasso <- tibble(spotify_train, 'prob_event' = scores_train_lasso)
+results_test_lasso <- tibble(spotify_test, 'prob_event' = scores_test_lasso)
+
+roc_plot_train_lasso <- ggplot(results_train_lasso, 
+            aes(m = prob_event, d = isPopular)) + 
+  geom_roc(labelsize = 3.5, 
+           cutoffs.at = 
+             c(0.9,0.8,0.7,0.5,0.3,0.2,0.1,0)) +
+  theme_minimal(base_size = 16)
+
+print(roc_plot_train_lasso)
+print(calc_auc(roc_plot_train_lasso))
+```
+
+```{r}
+lasso_metric_table <- data.frame(matrix(ncol = 4))
+colnames(lasso_metric_table) <- c('isPopular','ROC_AUC', 'λ', 'R_Squared')
+
+for (x in incrementalTreshold) {
+  
+  # Mutate isPopular variable with a new threshold, x
+  spotify_clean_1 <- spotify %>%
+  mutate(
+    isPopular = if_else(popularity >= x, 1, 0),
+  )
+
+  spotify_split_1 <- initial_split(spotify_clean_1, prop = 0.75)
+  spotify_train_1 <- training(spotify_split_1)
+  spotify_test_1 <- training(spotify_split_1)
+  
+  y_train <- spotify_train_1$isPopular
+  y_test <- spotify_test_1$isPopular
+  
+  lasso_fit_1 <- cv.glmnet(isPopular ~ danceability + energy + instrumentalness
+                       + liveness + loudness + speechiness + tempo + valence + duration_ms,
+                       data = spotify_train_1,
+                       # note alpha = 1 sets lasso!  
+                       alpha = 1,
+                       na.action = na.exclude)
+
+  best_lambda_lasso_1 <- format(round(log(lasso_fit_1$lambda.min), 3), nsmall = 3)
+  
+  # Calculate training and testing scores
+  scores_train_lasso_1 <- predict(lasso_fit_1, newdata = spotify_train_1, lambda = best_lasso_lambda_1)
+  scores_test_lasso_1 <- predict(lasso_fit_1, newdata = spotify_test_1, lambda = best_lasso_lambda_1)
+  results_train_lasso_1 <- tibble(spotify_train_1, 'prob_event' = scores_train_lasso_1)
+  results_test_lasso_1 <- tibble(spotify_test_1, 'prob_event' = scores_test_lasso_1)
+  
+  # Calculate and store ROC/AUC value
+  roc_plot_test_lasso_1 <- ggplot(results_test_ridge_1, aes(m = prob_event, d = isPopular)) + 
+    geom_roc(labelsize = 3.5, cutoffs.at = c(0.9,0.8,0.7,0.5,0.3,0.2,0.1,0))
+  
+  current_auc <- format(round(((calc_auc(roc_plot_test_ridge_1))$AUC), 3), nsmall = 3)
+
+  results <- eval_results(y_train, scores_train_lasso_1, spotify_train_1)
+  lasso_metric_table <- rbind(lasso_metric_table, c(x, current_auc, best_lambda_lasso_1, results$Rsquare))
+}
+
+
+```
+
+
+```{r}
+lasso_metric_table <- as_tibble(lasso_metric_table)
+lasso_metric_table <-
+  lasso_metric_table %>%
+  slice(2:6)
+
+head(lasso_metric_table) %>%
+  gt() %>%
+  gt_theme_nytimes() %>%
+  tab_header(
+    title = ("Error Metric Measurements for Lasso Model"),
+    subtitle = ("Deciding which isPopular threshold is most accurate")
+  )
+
+```
