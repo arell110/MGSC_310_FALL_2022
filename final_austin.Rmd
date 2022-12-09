@@ -1,0 +1,424 @@
+---
+title: "Final"
+author: "Austin Simpson"
+subtitle: MGSC 310
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+---
+
+```{r setup, include=FALSE}
+
+# Please leave this code chunk as is. It makes some slight formatting changes to alter the output to be more aesthetically pleasing. 
+
+library(knitr)
+
+# Change the number in set seed to your own favorite number
+set.seed(1818)
+options(width=50)
+options(scipen=10)
+
+
+# this sets text outputted in code chunks to small
+opts_chunk$set(tidy.opts=list(width.wrap=50),tidy=TRUE, size = "vsmall")  
+opts_chunk$set(message = FALSE,                                          
+               warning = FALSE,
+               # "caching" stores objects in code chunks and only rewrites if you change things
+               cache = FALSE,                               
+               # automatically downloads dependency files
+               autodep = TRUE,
+               # 
+               cache.comments = FALSE,
+               # 
+               collapse = TRUE,
+               # change fig.width and fig.height to change the code height and width by default
+               fig.width = 5.0,  
+               fig.height = 2.5,
+               fig.align='center')
+
+
+```
+
+```{r setup-2}
+
+# Always print this out before your assignment
+sessionInfo()
+setwd("C:/Users/austi/OneDrive/Documents/Chapman/mgsc310/Final_Project")
+getwd()
+
+```
+
+
+<!-- ### start answering your problem set here -->
+<!-- You may export your homework in either html or pdf, with the former usually being easier. 
+     To export or compile your Rmd file: click above on 'Knit' then 'Knit to HTML' -->
+<!-- Be sure to submit both your .Rmd file and the compiled .html or .pdf file for full credit -->
+
+
+```{r setup-3}
+
+# load all your libraries in this chunk 
+library('tidyverse')
+library('Metrics')
+library('rsample')
+library('readr')
+library('dplyr')
+library('forcats')
+library('yardstick')
+library('ggplot2')
+library('plotROC')
+library('glmnet')
+library('glmnetUtils')
+library('ggridges')
+library('randomForest')
+library('vtable')
+library('rms')
+
+
+
+# note, do not run install.packages() inside a code chunk. install them in the console outside of a code chunk. 
+
+```
+
+
+ 
+```{r}
+setwd("C:/Users/austi/OneDrive/Documents/Chapman/mgsc310/Final_Project")
+
+data <- read_csv("all_data.csv")
+
+data_clean = data %>% select(-name_x, -uri_x, -uri_y, -album, -id, -name_y, -genres)
+
+data_clean = data_clean %>% as_tibble() %>% 
+  mutate(explicit = as.factor(explicit),
+         mode = as.factor(mode),
+         time_signature = as.factor(time_signature),
+         artist = as.factor(artist)) %>% 
+  mutate_if(is.character, as.factor)
+
+data_clean <- na.omit(data_clean)
+
+st(data_clean, file='spotify_data_summary')
+
+data_split <- initial_split(data_clean, prop = 0.75) 
+
+data_train <- training(data_split)
+data_test <- testing(data_split)
+
+rf_fit_artist <- randomForest(popularity ~ ., 
+                       data = data_train,
+                       type = regression,
+                       mtry = 3,
+                       ntree = 200, 
+                       importance = TRUE)
+rf_fit_no_artist <- randomForest(popularity ~ ., 
+                       data = data_train %>% select(-artist),
+                       type = regression,
+                       mtry = 3,
+                       ntree = 200, 
+                       importance = TRUE)
+
+rf_fit_no_artist_or_explicit <- randomForest(popularity ~ ., 
+                       data = data_train %>% select(-artist, -explicit),
+                       type = regression,
+                       mtry = 3,
+                       ntree = 200, 
+                       importance = TRUE)
+
+
+```
+
+```{r}
+importance_scores = importance(rf_fit_no_artist)
+print(importance_scores)
+
+varImpPlot(rf_fit_no_artist)
+varImpPlot(rf_fit_artist)
+varImpPlot(rf_fit_no_artist_or_explicit)
+#summary(rf_fit_no_artist)
+```
+
+```{r}
+
+
+tune_results <- tuneRF(x = data_train %>% select(-popularity), y = data_train %>% select(popularity), mtry = 1, ntree = 200)
+
+dim(data_train %>% select(-popularity))
+dim( data_train %>% select(popularity))
+tuned_rf = randomForest(popularity ~ .,
+                        data = data_train,
+                        mtry = tune_results$optimal$mtry,
+                        maxdepth = tune_results$optimal$maxdepth,
+                        n_trees = 200)
+```
+
+
+1j) Using the randomForest package, fit a random forest model using the movies_train dataset predicting grossM using all other variables as predictions. Fit the tree using 200 trees and the mtry suggested above. Store this object as rf_fit_[your_name], where [your_name] is replaced with your own name. Be sure to select the option importance = TRUE when fitting the model.
+
+```{r}
+
+rf_fit_austin <- randomForest(popularity ~ ., 
+                       data = data_train,
+                       type = regression,
+                       mtry = 3,
+                       ntree = 500, 
+                       importance = TRUE)
+
+```
+
+1k) How does our model improve as we increase the number of trees? Use plot over the fitted random forest object to determine how many trees should be used.
+
+```{r}
+plot(rf_fit_austin)
+```
+
+```{r}
+rf_fit_austin <- randomForest(popularity ~ ., 
+                       data = data_train,
+                       type = regression,
+                       mtry = 3,
+                       ntree = 200, 
+                       importance = TRUE)
+summary(rf_fit_austin)
+
+
+
+```
+```{r}
+for (m in 1:9){
+  
+rf_fit_austin <- randomForest(popularity ~ ., 
+                       data = data_train,
+                       type = regression,
+                       mtry = m,
+                       ntree = 200, 
+                       importance = TRUE)
+
+preds_train <- predict(rf_fit_austin, newdata = data_train)
+preds_test <- predict(rf_fit_austin, newdata = data_test)
+
+R_train = cor(preds_train, data_train$popularity)
+R_test = cor(preds_test, data_test$popularity)
+
+R2_train = R_train * R_train
+R2_test = R_test * R_test
+
+print(m)
+print("R2 train:")
+print(R2_train)
+print("R2 test:")
+print(R2_test)
+print("---------")
+}
+
+
+```
+
+
+
+```{r}
+
+summary(rf_fit_austin)
+
+
+preds_train <- predict(rf_fit_no_artist, newdata = data_train)
+preds_test <- predict(rf_fit_no_artist, newdata = data_test)
+
+# Calculate performance metrics for the model on the test set
+performance(preds_test, data_test$popularity)
+
+class(preds_train)
+class(data_train$popularity)
+length(data_train$popularity)
+length(preds_train)
+
+# Calculate the Pearson correlation coefficient between the two numeric vectors
+cor_results_train <- cor(preds_train, data_train$popularity)
+print("R2 train:")
+print(cor_results_train * cor_results_train)
+
+cor_results_test <- cor(preds_test, data_test$popularity)
+print("R2 test:")
+print(cor_results_test*cor_results_test)
+
+```
+
+```{r}
+results_train <- 
+  tibble(
+    `preds` = preds_train,
+    `true` = data_train$popularity,
+    `type` = "train"
+    )
+
+results_test <- 
+  tibble(
+    `preds` = preds_test,
+    `true` = data_test$popularity,
+    `type` = "test"
+  )
+
+results_df <- 
+  bind_rows(results_train, results_test)
+print(results_df)
+
+# Load the broom package
+library('broom')
+
+# Calculate the r2 score for the training set
+r2_train <- r2(preds_train, data_train$popularity)
+
+# Calculate the r2 score for the test set
+r2_test <- r2(preds_test, data_test$popularity)
+
+# Calculate the r2 scores for the training and test sets
+r2_results <- glance(results_df, preds, true)
+rf_fit_austin$rsq
+```
+
+```{r}
+ggplot(results_df, aes(x = true, y = preds)) +
+  geom_point(aes(color = type, alpha = 0.01)) + 
+  geom_abline(color = "black") +
+  facet_wrap(~ type) +
+  #xlim(10,40) + ylim(10,40) +
+  theme_minimal(base_size = 16) + 
+  theme(legend.position="bottom") +
+  scale_x_continuous(breaks=c(10,20,30,40,50,60,70,80,90,100)) +
+  scale_y_continuous(breaks=c(10,20,30,40,50,60,70,80,90,100))
+  
+
+
+```
+
+```{r}
+
+#2. R SQUARED error metric -- Coefficient of Determination
+RSQUARE = function(y_actual,y_predict){
+  cor(y_actual,y_predict)^2
+}
+```
+
+```{r}
+rf_mods <- list()
+oob_err <- 
+test_err <- NULL
+for(m in 1:9){
+  rf_fit <- randomForest(popularity ~ ., 
+                         data = data_train,
+                         mtry = m,
+                         type = regression,
+                         na.action = na.roughfix,
+                         ntree = 200)
+  oob_err[m] <- rf_fit$err.rate[200]
+  print(oob_err[m])
+  cat(m," ")
+}
+
+results_DF <- data.frame(mtry = 1:9, oob_err)
+ggplot(results_DF, aes(x = mtry, y = oob_err)) + geom_point(size=10) + theme_minimal()+scale_x_continuous(breaks=seq(1:9))
+
+```
+```{r}
+# Initialize oob_err as a numeric vector of length 9
+oob_err <- numeric(9)
+
+# Loop over m values from 1 to 9
+for(m in 1:9){
+
+  # Fit a random forest model with mtry = m and ntree = 200
+  rf_fit <- randomForest(popularity ~ ., 
+                         data = data_train,
+                         mtry = m,
+                         na.action = na.roughfix,
+                         ntree = 200)
+
+  # Check the length of the err.rate vector
+  L <- length(rf_fit$err.rate)
+
+  # Assign the last element of the err.rate vector to oob_err[m]
+  oob_err[m] <- rf_fit$err.rate[L]
+
+  # Print the value of oob_err[m]
+  print(oob_err[m])
+
+  # Print the current value of m
+  cat(m," ")
+}
+
+```
+```{r}
+# Initialize oob_err as a numeric vector of length 9
+oob_err <- numeric(9)
+
+# Loop over m values from 1 to 9
+for(m in 1:9){
+
+  # Fit a random forest model with mtry = m and ntree = 200
+  rf_fit <- randomForest(popularity ~ ., 
+                         data = data_train,
+                         mtry = m,
+                         na.action = na.roughfix,
+                         ntree = 200)
+
+  # Check if the model was able to be fit
+  if(is.null(rf_fit)){
+
+    # If the model was not able to be fit, print an error message and skip to the next value of m
+    cat("Error: unable to fit model for m =", m, "\n")
+    next
+  }
+
+  # Check if the data contains missing values
+  if(any(is.na(data_train))){
+
+    # If the data contains missing values, print an error message and skip to the next value of m
+    cat("Error: data contains missing values for m =", m, "\n")
+    next
+  }
+
+  # Check the length of the err.rate vector
+  L <- length(rf_fit$err.rate)
+
+  # Assign the last element of the err.rate vector to oob_err[m]
+  oob_err[m] <- rf_fit$err.rate[L]
+
+  # Print the value of oob_err[m]
+  print(oob_err[m])
+
+  # Print the current value of m
+  cat(m," ")
+}
+
+```
+
+```{r}
+# Load required libraries
+library(randomForest)
+library(ggplot2)
+
+# Set the seed for reproducibility
+set.seed(123)
+
+# Create a vector of mtry values
+mtry_values <- 1:9
+
+# Initialize a vector to store the accuracy values for each mtry
+accuracy <- c()
+
+# Loop over the mtry values and fit a random forest model
+for (mtry in mtry_values) {
+  model <- randomForest(mtry = mtry)
+  
+  # Calculate the accuracy of the model and store it in the accuracy vector
+  accuracy[mtry] <- model$accuracy
+}
+
+# Plot the accuracy values using ggplot2
+ggplot(data = data.frame(mtry_values, accuracy), aes(x = mtry_values, y = accuracy)) +
+  geom_line() +
+  xlab("mtry value") +
+  ylab("Accuracy")
+
+```
